@@ -1,5 +1,5 @@
-web3==4.7.2
-urllib3==1.22
 numpy
-pandas
 matplotlib
+pandas
+# optional: only needed to store records on a local Ethereum chain
+web3>=6

@@ -12,12 +12,21 @@ Undergraduate (B.Tech) project, 2023-2025. Team project; this repo holds the cod
 - **Timing graph:** plots the running time of the proposed mechanism against a baseline.
 
 ## Run it
-1. Start a local Ethereum chain on `http://127.0.0.1:9545` (for example Truffle develop or Ganache) and deploy `CrowdSensing.sol`.
-2. Put the deployed contract address into `PPQC.py` (`deployed_contract_address`, in `readDetails` and `saveDataBlockChain`).
-3. `pip install -r requirements.txt` (Python 3.7 was used)
-4. `python PPQC.py`
+```bash
+pip install -r requirements.txt
+python PPQC.py
+```
+Click **Generate Mobile Crowd Sourcing Network**, pick a participant and click **Submit Data**.
+
+Without a blockchain, quality records are written to `ledger.txt` and the app says so. To store them on a local Ethereum chain instead:
+1. Start a chain (for example Ganache or `truffle develop`) and deploy `CrowdSensing.sol`.
+2. Set `PPQC_CHAIN_URL` (default `http://127.0.0.1:9545`) and `PPQC_CONTRACT_ADDRESS` to your deployed address.
+3. Run `python PPQC.py`.
+
+## Tests
+`python -m pytest` checks, offline: encryption then decryption returns each location, the quality check rewards and penalises correctly, and records fall back to the local ledger when no chain is running. They run on GitHub Actions on every push.
 
 ## Limitations (please read)
 - The encryption is a **teaching-scale demo**: tiny parameters (n=32), and the keys and noise are fixed in the code rather than random. It is not secure and must not be used to protect real data.
-- The contract address in the code belongs to a local test chain from my machine and will not work elsewhere.
-- Written as a university project; the code has not been refactored or tested beyond running the simulation.
+- The default contract address belongs to a local test chain from my machine; set `PPQC_CONTRACT_ADDRESS` to your own.
+- Written as a university project. The blockchain calls were updated to the current web3.py API (the original pinned web3 4.7 from 2018, which no longer installs on current Python).

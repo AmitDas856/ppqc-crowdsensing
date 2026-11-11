@@ -18,7 +18,11 @@ from Homomorphic import privacyData, decryptData
 import socket
 import pickle
 import json
-from web3 import Web3, HTTPProvider
+import os
+try:
+    from web3 import Web3
+except ImportError:  # the simulation still runs without web3
+    Web3 = None
 import timeit
 
 global mobile
@@ -38,41 +42,82 @@ global details
 ppqc = []
 ppda = []
 
+# ---------------------------------------------------------------------------
+# Blockchain storage
+# The chain URL and contract address can be set with the PPQC_CHAIN_URL and
+# PPQC_CONTRACT_ADDRESS environment variables. If web3 is not installed or no
+# chain is reachable, records go to a local file (ledger.txt) instead, so the
+# simulation still runs.
+# ---------------------------------------------------------------------------
+CHAIN_URL = os.environ.get("PPQC_CHAIN_URL", "http://127.0.0.1:9545")
+CONTRACT_ADDRESS = os.environ.get("PPQC_CONTRACT_ADDRESS", "0xe53B51d75448549C1A6445F3C5B989E9c4c72256")
+CONTRACT_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "CrowdSensing.json")
+LEDGER_FILE = os.environ.get("PPQC_LEDGER", "ledger.txt")
+storage_mode = None  # "blockchain" or "local file", set on first use
+
+
+def get_contract():
+    """Return (web3, contract) for the local chain, or (None, None) if unavailable."""
+    if Web3 is None:
+        return None, None
+    try:
+        web3 = Web3(Web3.HTTPProvider(CHAIN_URL, request_kwargs={"timeout": 3}))
+        if not web3.is_connected():
+            return None, None
+        web3.eth.default_account = web3.eth.accounts[0]
+        with open(CONTRACT_JSON) as file:
+            contract_abi = json.load(file)["abi"]
+        contract = web3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=contract_abi)
+        return web3, contract
+    except Exception as exc:
+        print("Blockchain not available, using local ledger:", exc)
+        return None, None
+
+
 def readDetails():
-    global details
-    details = ""
-    blockchain_address = 'http://127.0.0.1:9545' #Blokchain connection IP
-    web3 = Web3(HTTPProvider(blockchain_address))
-    web3.eth.defaultAccount = web3.eth.accounts[0]
-    compiled_contract_path = 'CrowdSensing.json' #CrowdSensing contract code
-    deployed_contract_address = '0xe53B51d75448549C1A6445F3C5B989E9c4c72256' #hash address to access counter feit contract
-    with open(compiled_contract_path) as file:
-        contract_json = json.load(file)  # load contract info as JSON
-        contract_abi = contract_json['abi']  # fetch contract's abi - necessary to call its functions
-    file.close()
-    contract = web3.eth.contract(address=deployed_contract_address, abi=contract_abi) #now calling contract to access data
-    details = contract.functions.getParticipantBlock().call()
-    print(details)    
+    """All participant records stored so far."""
+    global details, storage_mode
+    web3, contract = get_contract()
+    if contract is not None:
+        try:
+            details = contract.functions.getParticipantBlock().call()
+            storage_mode = "blockchain"
+            return details
+        except Exception as exc:
+            print("Contract call failed, using local ledger:", exc)
+    storage_mode = "local file"
+    details = open(LEDGER_FILE).read() if os.path.exists(LEDGER_FILE) else ""
+    return details
+
 
 def saveDataBlockChain(currentData):
-    global details
-    global contract
-    details = ""
-    blockchain_address = 'http://127.0.0.1:9545'
-    web3 = Web3(HTTPProvider(blockchain_address))
-    web3.eth.defaultAccount = web3.eth.accounts[0]
-    compiled_contract_path = 'CrowdSensing.json' #CrowdSensing contract file
-    deployed_contract_address = '0xe53B51d75448549C1A6445F3C5B989E9c4c72256' #contract address
-    with open(compiled_contract_path) as file:
-        contract_json = json.load(file)  # load contract info as JSON
-        contract_abi = contract_json['abi']  # fetch contract's abi - necessary to call its functions
-    file.close()
-    contract = web3.eth.contract(address=deployed_contract_address, abi=contract_abi)
-    readDetails()
-    details+=currentData
-    msg = contract.functions.createParticipantBlock(details).transact()
-    tx_receipt = web3.eth.waitForTransactionReceipt(msg)
-    
+    """Append one participant's quality record to the chain (or the local ledger)."""
+    global details, storage_mode
+    web3, contract = get_contract()
+    if contract is not None:
+        try:
+            details = contract.functions.getParticipantBlock().call() + currentData
+            tx_hash = contract.functions.createParticipantBlock(details).transact()
+            web3.eth.wait_for_transaction_receipt(tx_hash)
+            storage_mode = "blockchain"
+            return storage_mode
+        except Exception as exc:
+            print("Contract write failed, using local ledger:", exc)
+    with open(LEDGER_FILE, "a") as ledger:
+        ledger.write(currentData)
+    storage_mode = "local file"
+    return storage_mode
+
+
+def quality_check(true_x, true_y, received_x, received_y, threshold=6):
+    """Noise between ground truth and the received location, and the reward change.
+
+    A report within `threshold` of the ground truth earns +1; otherwise -1.
+    """
+    noise_value = math.sqrt((true_x - received_x) ** 2 + (true_y - received_y) ** 2)
+    return noise_value, (1 if noise_value < threshold else -1)
+
+
 def getDistance(iot_x,iot_y,x1,y1):
     flag = False
     for i in range(len(iot_x)):
@@ -212,15 +257,13 @@ def sendData():
         receive = response.split(" ")
         receive[0] = int(receive[0]) + random.randrange(2,6)
         receive[1] = int(receive[1]) + random.randrange(2,6)
-        noise_value = math.sqrt((src_x - int(receive[0]))**2 + (src_y - int(receive[1]))**2)
+        noise_value, reward_change = quality_check(src_x, src_y, int(receive[0]), int(receive[1]))
         text.insert(END,"Received Participant Data : "+str(receive[0])+" "+str(receive[1])+"\n")
-        if noise_value < 6:
-            rewards[src] = rewards[src] + 1
-        else:
-            rewards[src] = rewards[src] - 1
-            #save data to blockchain
-        start = timeit.default_timer()    
-        saveDataBlockChain("Participant ID : "+str(src)+" Noise Value : "+str(noise_value)+" Total Rewards : "+str(rewards[src])+"\n")
+        rewards[src] = rewards[src] + reward_change
+        # save the quality record to the blockchain (or the local ledger)
+        start = timeit.default_timer()
+        mode = saveDataBlockChain("Participant ID : "+str(src)+" Noise Value : "+str(noise_value)+" Total Rewards : "+str(rewards[src])+"\n")
+        text.insert(END,"Quality record saved to: "+mode+"\n")
         end = timeit.default_timer()
         ppqc.append(end - start)
         ppda.append(end - start1)

@@ -3,3 +3,6 @@ __pycache__/
 *.docx
 *.rar
 node_modules/
+__pycache__/
+*.pyc
+ledger.txt
